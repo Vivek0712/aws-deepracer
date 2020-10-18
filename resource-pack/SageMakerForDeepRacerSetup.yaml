@@ -1,0 +1,322 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'AWS DeepRacer: Driven by Reinforcement Learning'
+Parameters:
+  SagemakerInstanceType:
+    Description: 'Machine Learning instance type that should be used for Sagemaker Notebook'
+    Type: String
+    AllowedValues:
+      - ml.t2.medium
+      - ml.t2.large
+      - ml.t2.xlarge
+      - ml.t3.medium
+      - ml.t3.large
+      - ml.t3.xlarge
+      - ml.m5.xlarge
+    Default: ml.t3.medium
+  CreateS3Bucket:
+    Description: Create and use a bucket created via this template for model storage
+    Default: True
+    Type: String
+    AllowedValues:
+      - True
+      - False
+    ConstraintDescription: Must be defined at True|False.
+  VPCCIDR:
+    Description: 'CIDR Block for VPC (Do Not Edit)'
+    Type: String
+    Default: 10.96.0.0/16
+  PUBSUBNETA:
+    Description: 'Public Subnet A (Do Not Edit)'
+    Type: String
+    Default: 10.96.6.0/24
+  PUBSUBNETB:
+    Description: 'Public Subnet B (Do Not Edit)'
+    Type: String
+    Default: 10.96.7.0/24
+  PUBSUBNETC:
+    Description: 'Public Subnet C (Do Not Edit)'
+    Type: String
+    Default: 10.96.8.0/24
+  PUBSUBNETD:
+    Description: 'Public Subnet D (Do Not Edit)'
+    Type: String
+    Default: 10.96.9.0/24
+  S3PathPrefix:
+    Type: String
+    Description: 'Bootstrap resources prefix'
+    Default: 'awsu-spl-dev/spl-227'
+  S3ResourceBucket:
+    Type: String
+    Description: 'Bootstrap S3 Bucket'
+    Default: 'aws-training'
+Conditions:
+  CreateS3Bucket: !Equals [ !Ref CreateS3Bucket, True ]
+  #  NoCreateS3Bucket: !Equals [ !Ref CreateS3Bucket, False ]
+Resources:
+
+# Defining the VPC Used for the sanbox ENV, and notebook instance
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Ref VPCCIDR
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      Tags:
+        - Key: Name
+          Value: 'DeepRacer Sandbox'
+# There is a few calls made to public to download supporting resources
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    DependsOn: VPC
+    Properties:
+      Tags:
+        - Key: Name
+          Value: 'DeepRacer Sandbox IGW'
+# Attached this IGW to the sanbox VPC
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    DependsOn:
+      - VPC
+      - InternetGateway
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+# Default setting in the notebook is to use Public IP address to communicate
+# between instances running the simulation, and the instances collecting and
+# processing. A NatGW could have been used with added costs, but would allow for
+# use of private IP address.
+
+# Found in testing that not all ML instance types may not be deployed or avaliable
+# in all AZ's within a given region. We are using the newest instance family of T3
+  PublicSubnetA:
+    Type: 'AWS::EC2::Subnet'
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PUBSUBNETA
+      AvailabilityZone: !Select
+        - '0'
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: 'Deepracer Sandbox - Public Subnet - A'
+  PublicSubnetB:
+    Type: 'AWS::EC2::Subnet'
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PUBSUBNETB
+      AvailabilityZone: !Select
+        - '1'
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: 'Deepracer Sandbox Public Subnet - B'
+  PublicSubnetC:
+    Type: 'AWS::EC2::Subnet'
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PUBSUBNETC
+      AvailabilityZone: !Select
+        - '2'
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: 'Deepracer Sandbox Public Subnet - C'
+  PublicSubnetD:
+    Type: 'AWS::EC2::Subnet'
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PUBSUBNETD
+      AvailabilityZone: !Select
+        - '3'
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: 'Deepracer Sandbox Public Subnet - D'
+# Define the Public Routing Table
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    DependsOn:
+      - VPC
+      - AttachGateway
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: 'Deepracer Sandbox Public Routing Table'
+# And add in the default route to 0.0.0.0/0
+  PublicRouteIGW:
+    Type: 'AWS::EC2::Route'
+    DependsOn:
+      - PublicRouteTable
+      - InternetGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+# Attach the routing table to each of the subnets
+  PublicRouteTableAssociationA:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+  PublicRouteTableAssociationB:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+  PublicRouteTableAssociationC:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetC
+      RouteTableId: !Ref PublicRouteTable
+  PublicRouteTableAssociationD:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetD
+      RouteTableId: !Ref PublicRouteTable
+# Define a S3 endpoint for all the S3 traffic during training
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      RouteTableIds:
+        - !Ref PublicRouteTable
+      ServiceName: !Join
+        - ''
+        - - com.amazonaws.
+          - !Ref 'AWS::Region'
+          - .s3
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 's3:*'
+            Resource:
+              - '*'
+# This exercise is going to need a bucket to store any file generated from training
+# There is a conditions to evaluate if the PRAM is true, else this resource would
+# not be created.
+  SandboxBucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Retain
+    Condition: CreateS3Bucket
+    Properties:
+      BucketName:
+        Fn::Join:
+          - "-"
+          - - deepracer-trainingexercise
+            - Ref: AWS::Region
+            - Ref: AWS::AccountId
+# Sagemaker is going to be making calls to Robomaker to launch the sim, and
+# Sagemaker to launch the training insance. This requries AWS credentals. A
+# Principal of sagemaker and robomaker needs to be assiged as both service will
+# assuming this role. Default Sagemaker full access and s3 access is needed.
+  SageMakerNotebookInstanceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - sagemaker.amazonaws.com
+                - robomaker.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSageMakerFullAccess'
+      Path: /
+      Policies:
+        - PolicyName: DeepRacerPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: [ 's3:*',
+                          'iam:GetRole' ]
+                Resource: '*'
+
+# Security Group for sagemaker instance running in this VPC
+  SagemakerInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Sagemaker Security Group
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 1
+        ToPort: 65535
+        CidrIp: !Ref VPCCIDR
+      - IpProtocol: udp
+        FromPort: 1
+        ToPort: 65535
+        CidrIp: !Ref VPCCIDR
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 1
+        ToPort: 65535
+        CidrIp: !Ref VPCCIDR
+      - IpProtocol: udp
+        FromPort: 1
+        ToPort: 65535
+        CidrIp: !Ref VPCCIDR
+# Creating the Sagemaker Notebook Instance
+  SageMakerNotebookInstance:
+    Type: 'AWS::SageMaker::NotebookInstance'
+    Properties:
+      NotebookInstanceName: !Join ["-", ["DeepRacerSagemakerSandbox", !Ref "AWS::StackName"]]
+      SecurityGroupIds:
+        - !GetAtt
+          - SagemakerInstanceSecurityGroup
+          - GroupId
+      InstanceType: !Ref SagemakerInstanceType
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: 'DeepRacer Sandbox'
+      LifecycleConfigName: !GetAtt
+          - SageMakerNotebookInstanceLifecycleConfig
+          - NotebookInstanceLifecycleConfigName
+      RoleArn: !GetAtt
+          - SageMakerNotebookInstanceRole
+          - Arn
+
+
+  # This is how the notebook gets loaded on to sagemaker. There is a zip file with
+  # with the needed files, and a second http call to pull down the notebook.
+  # This is only done "OnCreate" - when the sagemaker instance is first deployed
+  # You can can the script get run "OnStart" (when a sagemaker instance changes
+  # from a stopped state to a running state). This would automaticlly update file
+  # to be the latest form source, but could over write changes applied during
+  # your testing
+  SageMakerNotebookInstanceLifecycleConfig:
+    Type: 'AWS::SageMaker::NotebookInstanceLifecycleConfig'
+    Properties:
+      OnCreate:
+        - Content:
+            Fn::Base64:
+              !Sub |
+              #!/bin/bash
+              cd /home/ec2-user/SageMaker
+              curl -O https://us-west-2-${S3ResourceBucket}.s3.amazonaws.com/${S3PathPrefix}/scripts/rl_deepracer_robomaker_coach.ipynb
+              curl -O https://us-west-2-${S3ResourceBucket}.s3.amazonaws.com/${S3PathPrefix}/scripts/rl_deepracer_robomaker_coach.zip
+              unzip rl_deepracer_robomaker_coach.zip
+              chown ec2-user:ec2-user -R /home/ec2-user/SageMaker
+
+Outputs:
+  # Display the name of the bucekt that was created from this CFN Stack
+    ModelBucket:
+      Condition: CreateS3Bucket
+      Value: !Ref SandboxBucket
+  # URL to get to the Sagemaker UI, and find the Jupyter button.
+    SagemakerNotebook:
+      Value:
+        !Sub |
+          https://console.aws.amazon.com/sagemaker/home?region=${AWS::Region}#/notebook-instances/${SageMakerNotebookInstance.NotebookInstanceName}
